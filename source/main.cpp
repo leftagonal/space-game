@@ -7,24 +7,107 @@
 #include <vector>
 #include <cmath>
 
-int main() {
-    glfwInit();
+struct Version {
+    using Type = uint32_t;
 
-    glfwWindowHint(GLFW_RESIZABLE, GLFW_FALSE);
-    glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
+    Type major;
+    Type minor;
+    Type patch;
+};
 
-    GLFWwindow* window = glfwCreateWindow(800, 600, "Space Game", nullptr, nullptr);
+struct Extent2D {
+    using Type = uint32_t;
 
-    {
-        vk::raii::Context context;
+    Type width;
+    Type height;
+};
 
-        auto supportedLayers = context.enumerateInstanceLayerProperties();
-        auto supportedExtensions = context.enumerateInstanceExtensionProperties();
-        auto apiVersion = context.enumerateInstanceVersion();
+struct ContextFeatures {
+    bool debugging;
+};
 
-        std::vector<const char*> requiredLayers = {
-            "VK_LAYER_KHRONOS_validation",
-        };
+struct ApplicationInfo {
+    std::string_view name;
+    Version version;
+};
+
+class GLFW {
+public:
+    GLFW() {
+        glfwInit();
+        glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
+    }
+
+    ~GLFW() {
+        glfwTerminate();
+    }
+};
+
+struct WindowInfo {
+    std::string_view title;
+    Extent2D extent;
+};
+
+struct WindowFeatures {
+    bool resizable;
+    bool decorated;
+};
+
+class Context;
+
+class Window {
+public:
+    Window(Context& context, const WindowInfo& info, const WindowFeatures& features) {
+
+    }
+
+private:
+    WindowInfo info_;
+    WindowFeatures features_;
+    GLFWwindow* window_;
+    vk::raii::SurfaceKHR surface_;
+
+    [[nodiscard]] GLFWwindow* makeWindow() {
+        return glfwCreateWindow();
+    }
+
+    [[nodiscard]] vk::raii::SurfaceKHR makeSurface() {
+        VkSurfaceKHR surface = nullptr;
+    }
+};
+
+class Context {
+public:
+    Context(const ApplicationInfo& applicationInfo, const ContextFeatures& features)
+        : applicationInfo_(applicationInfo), features_(features), instance_(makeInstance()) {
+    }
+
+    [[nodiscard]] vk::raii::Context& vkContext();
+    [[nodiscard]] vk::raii::Instance& vkInstance();
+
+    [[nodiscard]] const vk::raii::Context& vkContext() const;
+    [[nodiscard]] const vk::raii::Instance& vkInstance() const;
+
+private:
+    ApplicationInfo applicationInfo_;
+    ContextFeatures features_;
+
+    GLFW glfw_;
+    vk::raii::Context context_;
+    vk::raii::Instance instance_;
+
+    [[nodiscard]] vk::raii::Instance makeInstance() {
+        auto supportedLayers = context_.enumerateInstanceLayerProperties();
+        auto supportedExtensions = context_.enumerateInstanceExtensionProperties();
+        auto apiVersion = context_.enumerateInstanceVersion();
+
+        static constexpr const char* validationLayerName = "VK_LAYER_KHRONOS_validation";
+
+        std::vector<const char*> requiredLayers;
+
+        if (features_.debugging) {
+            requiredLayers.emplace_back(validationLayerName);
+        }
 
         for (auto& requirement : requiredLayers) {
             auto condition = [&](const auto& candidate) {
@@ -34,7 +117,7 @@ int main() {
             auto candidate = std::find_if(supportedLayers.begin(), supportedLayers.end(), condition);
 
             if (candidate == supportedLayers.end()) {
-                throw std::runtime_error("required layer is missing!");
+                throw std::runtime_error("required instance layer is missing!");
             }
         }
 
@@ -44,6 +127,16 @@ int main() {
 
         std::vector<const char*> requiredExtensions{windowExtensions, windowExtensions + windowExtensionCount};
 
+        auto findPortability = [&](const auto& candidate) {
+            return candidate.extensionName == std::string_view(vk::KHRPortabilityEnumerationExtensionName);
+        };
+
+        bool portable = std::find_if(supportedExtensions.begin(), supportedExtensions.end(), findPortability) != supportedExtensions.end();
+
+        if (portable) {
+            requiredExtensions.emplace_back(vk::KHRPortabilityEnumerationExtensionName);
+        }
+
         for (auto& requirement : requiredExtensions) {
             auto condition = [&](const auto& candidate) {
                 return candidate.extensionName == std::string_view(requirement);
@@ -52,20 +145,20 @@ int main() {
             auto candidate = std::find_if(supportedExtensions.begin(), supportedExtensions.end(), condition);
 
             if (candidate == supportedExtensions.end()) {
-                throw std::runtime_error("required extension is missing!");
+                throw std::runtime_error("required instance extension is missing!");
             }
         }
 
         vk::ApplicationInfo applicationInfo = {
-            .pApplicationName = "space game",
-            .applicationVersion = vk::makeVersion(0, 1, 0),
+            .pApplicationName = applicationInfo_.name.data(),
+            .applicationVersion = vk::makeVersion(applicationInfo_.version.major, applicationInfo_.version.minor, applicationInfo_.version.patch),
             .pEngineName = "anvil",
             .engineVersion = vk::makeVersion(0, 1, 0),
             .apiVersion = apiVersion,
         };
 
         vk::InstanceCreateInfo instanceInfo = {
-            .flags = vk::InstanceCreateFlags{},
+            .flags = portable ? vk::InstanceCreateFlagBits::eEnumeratePortabilityKHR : vk::InstanceCreateFlags{},
             .pApplicationInfo = &applicationInfo,
             .enabledLayerCount = static_cast<uint32_t>(requiredLayers.size()),
             .ppEnabledLayerNames = requiredLayers.data(),
@@ -73,9 +166,29 @@ int main() {
             .ppEnabledExtensionNames = requiredExtensions.data(),
         };
 
-        vk::raii::Instance instance{context, instanceInfo};
+        return {context_, instanceInfo};
+    }
+};
 
-        auto physicalDevices = instance.enumeratePhysicalDevices();
+int main() {
+    ContextFeatures contextFeatures = {
+        .debugging = true,
+    };
+
+    ApplicationInfo applicationInfo = {
+        .name = "Space Game",
+        .version = {0, 1, 0},
+    };
+
+    Context context{applicationInfo, contextFeatures};
+
+    glfwWindowHint(GLFW_RESIZABLE, GLFW_FALSE);
+    glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
+
+    GLFWwindow* window = glfwCreateWindow(800, 600, "Space Game", nullptr, nullptr);
+
+    {
+        auto physicalDevices = context.vkInstance().enumeratePhysicalDevices();
         auto physicalDevice = physicalDevices.front();
 
         auto deviceExtensions = physicalDevice.enumerateDeviceExtensionProperties();
