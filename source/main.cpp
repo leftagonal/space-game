@@ -7,8 +7,12 @@
 #include <cmath>
 #include <vector>
 
-#include <context.hpp>
-#include <window.hpp>
+#include <anvil/context.hpp>
+#include <anvil/device.hpp>
+#include <anvil/fence.hpp>
+#include <anvil/semaphore.hpp>
+#include <anvil/swapchain.hpp>
+#include <anvil/window.hpp>
 
 int main() {
 	anvil::ContextFeatures contextFeatures = {
@@ -28,94 +32,49 @@ int main() {
 	};
 
 	anvil::WindowFeatures windowFeatures = {
-		.resizable = false,
+		.resizable = true,
 		.decorated = true,
 	};
 
 	anvil::Window window{context, windowInfo, windowFeatures};
 
-	auto physicalDevices = context.vkInstance().enumeratePhysicalDevices();
-	auto physicalDevice = physicalDevices.front();
+	auto physicalDevices = context.physicalDevices();
+	auto physicalDevice = physicalDevices.back();
 
-	auto deviceExtensions = physicalDevice.enumerateDeviceExtensionProperties();
-
-	std::vector<const char*> requiredDeviceExtensions = {
-		vk::KHRSwapchainExtensionName,
+	anvil::DeviceQueueCounts deviceQueueCounts = {
+		.graphics = 1,
+		.present = 1,
+		.transfer = 1,
+		.compute = 0,
 	};
 
-	for (auto& requirement : requiredDeviceExtensions) {
-		auto condition = [&](const auto& candidate) {
-			return candidate.extensionName == std::string_view(requirement);
-		};
+	anvil::DeviceFeatures deviceFeatures = {};
 
-		auto candidate = std::find_if(deviceExtensions.begin(), deviceExtensions.end(), condition);
+	anvil::Device device(physicalDevice, window, deviceQueueCounts, deviceFeatures);
 
-		if (candidate == deviceExtensions.end()) {
-			throw std::runtime_error("required extension is missing!");
-		}
-	}
+	anvil::Queue graphicsQueue = device.getQueue({anvil::QueueUsage::Graphics, 0});
+	anvil::Queue presentQueue = device.getQueue({anvil::QueueUsage::Present, 0});
+	anvil::Queue transferQueue = device.getQueue({anvil::QueueUsage::Transfer, 0});
 
-	std::vector<float> priorities = {1.0};
-
-	vk::DeviceQueueCreateInfo queueInfo = {
-		.queueFamilyIndex = 0,
-		.queueCount = 1,
-		.pQueuePriorities = priorities.data(),
+	anvil::SwapchainInfo swapchainInfo = {
+		.format = {
+			.format = anvil::Format::B8G8R8A8sRGB,
+			.colourSpace = anvil::ColourSpace::sRGBNonlinear,
+		},
+		.presentMode = anvil::PresentMode::FIFO,
+		.imageCount = 3,
 	};
 
-	vk::PhysicalDeviceVulkan13Features vulkan13Features = {
-		.synchronization2 = true,
-		.dynamicRendering = true,
-	};
+	anvil::Swapchain swapchain{device, window, swapchainInfo};
 
-	vk::DeviceCreateInfo deviceInfo = {
-		.pNext = &vulkan13Features,
-		.queueCreateInfoCount = 1,
-		.pQueueCreateInfos = &queueInfo,
-		.enabledExtensionCount = static_cast<uint32_t>(requiredDeviceExtensions.size()),
-		.ppEnabledExtensionNames = requiredDeviceExtensions.data(),
-	};
+	std::vector<anvil::Semaphore> awaitAcquire;
+	std::vector<anvil::Semaphore> signalRender;
+	std::vector<anvil::Fence> inFlight;
 
-	vk::raii::Device device{physicalDevice, deviceInfo};
-	vk::raii::Queue queue = device.getQueue(0, 0);
-
-	auto& surface = window.vkSurface();
-	auto preTransform = physicalDevice.getSurfaceCapabilitiesKHR(surface).currentTransform;
-
-	vk::SwapchainCreateInfoKHR swapchainInfo = {
-		.surface = surface,
-		.minImageCount = 3,
-		.imageFormat = vk::Format::eR8G8B8A8Unorm,
-		.imageColorSpace = vk::ColorSpaceKHR::eSrgbNonlinear,
-		.imageExtent = {800, 600},
-		.imageArrayLayers = 1,
-		.imageUsage = vk::ImageUsageFlagBits::eColorAttachment | vk::ImageUsageFlagBits::eTransferDst,
-		.imageSharingMode = vk::SharingMode::eExclusive,
-		.pQueueFamilyIndices = nullptr,
-		.preTransform = preTransform,
-		.compositeAlpha = vk::CompositeAlphaFlagBitsKHR::eOpaque,
-		.presentMode = vk::PresentModeKHR::eFifo,
-		.clipped = false,
-		.oldSwapchain = nullptr,
-	};
-
-	vk::raii::SwapchainKHR swapchain{device, swapchainInfo};
-
-	auto images = swapchain.getImages();
-
-	vk::SemaphoreCreateInfo semaphoreInfo = {};
-	vk::FenceCreateInfo fenceInfo = {
-		.flags = vk::FenceCreateFlagBits::eSignaled,
-	};
-
-	std::vector<vk::raii::Semaphore> awaitAcquire;
-	std::vector<vk::raii::Semaphore> signalRender;
-	std::vector<vk::raii::Fence> inFlight;
-
-	for (size_t i = 0; i < images.size(); ++i) {
-		awaitAcquire.emplace_back(device, semaphoreInfo);
-		signalRender.emplace_back(device, semaphoreInfo);
-		inFlight.emplace_back(device, fenceInfo);
+	for (size_t i = 0; i < swapchain.imageCount(); ++i) {
+		awaitAcquire.emplace_back(device);
+		signalRender.emplace_back(device);
+		inFlight.emplace_back(device, true);
 	}
 
 	vk::CommandPoolCreateInfo poolInfo = {
@@ -123,15 +82,15 @@ int main() {
 		.queueFamilyIndex = 0,
 	};
 
-	vk::raii::CommandPool commandPool{device, poolInfo};
+	vk::raii::CommandPool commandPool{device.vkDevice(), poolInfo};
 
 	vk::CommandBufferAllocateInfo cmdAllocInfo = {
 		.commandPool = commandPool,
 		.level = vk::CommandBufferLevel::ePrimary,
-		.commandBufferCount = static_cast<uint32_t>(images.size()),
+		.commandBufferCount = static_cast<uint32_t>(swapchain.imageCount()),
 	};
 
-	auto commandBuffers = device.allocateCommandBuffers(cmdAllocInfo);
+	auto commandBuffers = device.vkDevice().allocateCommandBuffers(cmdAllocInfo);
 	auto& glfwContext = context.glfwContext();
 
 	size_t frame = 0;
@@ -143,10 +102,20 @@ int main() {
 		auto& fence = inFlight[frame];
 		auto& cmd = commandBuffers[frame];
 
-		auto waitResult = device.waitForFences({fence}, true, UINT64_MAX);
-		device.resetFences({fence});
+		auto waitResult = device.vkDevice().waitForFences({fence.vkFence()}, true, UINT64_MAX);
+		device.vkDevice().resetFences({fence.vkFence()});
 
-		auto [acquireResult, imageIndex] = swapchain.acquireNextImage(UINT64_MAX, awaitAcquire[frame]);
+	reacquire:
+		auto [acquireResult, imageIndex] = swapchain.acquire(awaitAcquire[frame]);
+
+		if (acquireResult == anvil::SwapchainResult::Recreate) {
+			anvil::Swapchain newSwapchain{device, window, swapchainInfo, swapchain};
+			swapchain = std::move(newSwapchain);
+
+			goto reacquire;
+		}
+
+		auto images = swapchain.vkSwapchain().getImages();
 
 		cmd.reset();
 		cmd.begin(vk::CommandBufferBeginInfo{});
@@ -203,12 +172,12 @@ int main() {
 		cmd.end();
 
 		vk::SemaphoreSubmitInfo waitInfo = {
-			.semaphore = *awaitAcquire[frame],
+			.semaphore = *awaitAcquire[frame].vkSemaphore(),
 			.stageMask = vk::PipelineStageFlagBits2::eClear,
 		};
 
 		vk::SemaphoreSubmitInfo signalInfo = {
-			.semaphore = *signalRender[frame],
+			.semaphore = *signalRender[frame].vkSemaphore(),
 			.stageMask = vk::PipelineStageFlagBits2::eClear,
 		};
 
@@ -225,21 +194,26 @@ int main() {
 			.pSignalSemaphoreInfos = &signalInfo,
 		};
 
-		queue.submit2({submitInfo}, fence);
+		graphicsQueue.vkQueue().submit2({submitInfo}, fence.vkFence());
 
 		vk::PresentInfoKHR presentInfo = {
 			.waitSemaphoreCount = 1,
-			.pWaitSemaphores = &*signalRender[frame],
+			.pWaitSemaphores = &*signalRender[frame].vkSemaphore(),
 			.swapchainCount = 1,
-			.pSwapchains = &*swapchain,
+			.pSwapchains = &*swapchain.vkSwapchain(),
 			.pImageIndices = &imageIndex,
 		};
 
-		auto presentResult = queue.presentKHR(presentInfo);
+		try {
+			auto presentResult = presentQueue.vkQueue().presentKHR(presentInfo);
+		} catch (const vk::OutOfDateKHRError& error) {
+			anvil::Swapchain newSwapchain{device, window, swapchainInfo, swapchain};
+			swapchain = std::move(newSwapchain);
+		}
 
 		frame = (frame + 1) % images.size();
 		time += 0.01;
 	}
 
-	device.waitIdle();
+	device.vkDevice().waitIdle();
 }

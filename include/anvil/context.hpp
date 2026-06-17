@@ -6,6 +6,7 @@
 #include <cstdint>
 #include <string_view>
 
+#include <anvil/physical_device.hpp>
 #include <glfw/context.hpp>
 
 namespace anvil {
@@ -38,6 +39,8 @@ namespace anvil {
 
 		[[nodiscard]] vk::raii::Instance& vkInstance();
 		[[nodiscard]] const vk::raii::Instance& vkInstance() const;
+
+		[[nodiscard]] std::vector<PhysicalDevice> physicalDevices() const;
 
 	private:
 		ApplicationInfo applicationInfo_;

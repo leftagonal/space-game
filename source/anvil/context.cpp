@@ -1,4 +1,4 @@
-#include <context.hpp>
+#include <anvil/context.hpp>
 
 using namespace anvil;
 
@@ -28,6 +28,20 @@ vk::raii::Instance& Context::vkInstance() {
 
 const vk::raii::Instance& Context::vkInstance() const {
 	return vkInstance_;
+}
+
+std::vector<PhysicalDevice> Context::physicalDevices() const {
+	auto candidates = vkInstance_.enumeratePhysicalDevices();
+
+	std::vector<PhysicalDevice> physicalDevices;
+
+	for (auto& candidate : candidates) {
+		// TODO: API version check
+
+		physicalDevices.emplace_back(candidate);
+	}
+
+	return physicalDevices;
 }
 
 vk::raii::Instance Context::makeInstance() {
