@@ -4,6 +4,7 @@
 #define GLFW_INCLUDE_VULKAN
 #include <GLFW/glfw3.h>
 
+#include <chrono>
 #include <cmath>
 #include <vector>
 
@@ -61,7 +62,7 @@ int main() {
 			.format = anvil::Format::B8G8R8A8sRGB,
 			.colourSpace = anvil::ColourSpace::sRGBNonlinear,
 		},
-		.presentMode = anvil::PresentMode::FIFO,
+		.presentMode = anvil::PresentMode::Immediate,
 		.imageCount = 3,
 	};
 
@@ -96,6 +97,21 @@ int main() {
 	size_t frame = 0;
 	float time = 0.0;
 
+	auto lastTime = std::chrono::steady_clock::now();
+	int frameCount = 0;
+	auto images = swapchain.vkSwapchain().getImages();
+	std::vector<vk::raii::ImageView> imageViews;
+	for (auto& image : images) {
+		vk::ImageViewCreateInfo viewInfo = {
+			.image = image,
+			.viewType = vk::ImageViewType::e2D,
+			.format = vk::Format::eB8G8R8A8Srgb,
+			.subresourceRange = {vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1},
+		};
+
+		imageViews.emplace_back(device.vkDevice(), viewInfo);
+	}
+
 	while (!window.glfwWindow().shouldClose()) {
 		glfwContext.pollEvents();
 
@@ -112,49 +128,75 @@ int main() {
 			anvil::Swapchain newSwapchain{device, window, swapchainInfo, swapchain};
 			swapchain = std::move(newSwapchain);
 
+			images = swapchain.vkSwapchain().getImages();
+			imageViews.clear();
+
+			for (auto& image : images) {
+				vk::ImageViewCreateInfo viewInfo = {
+					.image = image,
+					.viewType = vk::ImageViewType::e2D,
+					.format = vk::Format::eB8G8R8A8Srgb,
+					.subresourceRange = {vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1},
+				};
+
+				imageViews.emplace_back(device.vkDevice(), viewInfo);
+			}
+
 			goto reacquire;
 		}
-
-		auto images = swapchain.vkSwapchain().getImages();
 
 		cmd.reset();
 		cmd.begin(vk::CommandBufferBeginInfo{});
 
-		vk::ImageMemoryBarrier2 toClear = {
+		vk::ImageMemoryBarrier2 toRender = {
 			.srcStageMask = vk::PipelineStageFlagBits2::eTopOfPipe,
 			.srcAccessMask = vk::AccessFlags2{},
-			.dstStageMask = vk::PipelineStageFlagBits2::eClear,
-			.dstAccessMask = vk::AccessFlagBits2::eTransferWrite,
+			.dstStageMask = vk::PipelineStageFlagBits2::eColorAttachmentOutput,
+			.dstAccessMask = vk::AccessFlagBits2::eColorAttachmentWrite,
 			.oldLayout = vk::ImageLayout::eUndefined,
-			.newLayout = vk::ImageLayout::eTransferDstOptimal,
+			.newLayout = vk::ImageLayout::eColorAttachmentOptimal,
 			.srcQueueFamilyIndex = vk::QueueFamilyIgnored,
 			.dstQueueFamilyIndex = vk::QueueFamilyIgnored,
 			.image = images[imageIndex],
 			.subresourceRange = {vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1},
 		};
 
-		vk::DependencyInfo toClearDep = {
+		cmd.pipelineBarrier2(vk::DependencyInfo{
 			.imageMemoryBarrierCount = 1,
-			.pImageMemoryBarriers = &toClear,
+			.pImageMemoryBarriers = &toRender,
+		});
+
+		vk::RenderingAttachmentInfo colorAttachment = {
+			.imageView = imageViews[imageIndex],
+			.imageLayout = vk::ImageLayout::eColorAttachmentOptimal,
+			.loadOp = vk::AttachmentLoadOp::eClear,
+			.storeOp = vk::AttachmentStoreOp::eStore,
+			.clearValue = vk::ClearValue{vk::ClearColorValue{std::array<float, 4>{
+				-std::sin(time),
+				std::cos(time),
+				std::sin(time),
+				1.0f,
+			}}},
 		};
 
-		cmd.pipelineBarrier2(toClearDep);
+		auto extent = window.framebufferSize();
 
-		vk::ClearColorValue clearColor{std::array<float, 4>{
-			-std::sin(time),
-			std::cos(time),
-			std::sin(time),
-			1.0f,
-		}};
+		vk::RenderingInfo renderingInfo = {
+			.renderArea = {.offset = {0, 0}, .extent = {extent.width, extent.height}},
+			.layerCount = 1,
+			.colorAttachmentCount = 1,
+			.pColorAttachments = &colorAttachment,
+		};
 
-		cmd.clearColorImage(images[imageIndex], vk::ImageLayout::eTransferDstOptimal, clearColor, {vk::ImageSubresourceRange{vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1}});
+		cmd.beginRendering(renderingInfo);
+		cmd.endRendering();
 
 		vk::ImageMemoryBarrier2 toPresent = {
-			.srcStageMask = vk::PipelineStageFlagBits2::eClear,
-			.srcAccessMask = vk::AccessFlagBits2::eTransferWrite,
+			.srcStageMask = vk::PipelineStageFlagBits2::eColorAttachmentOutput,
+			.srcAccessMask = vk::AccessFlagBits2::eColorAttachmentWrite,
 			.dstStageMask = vk::PipelineStageFlagBits2::eBottomOfPipe,
 			.dstAccessMask = vk::AccessFlags2{},
-			.oldLayout = vk::ImageLayout::eTransferDstOptimal,
+			.oldLayout = vk::ImageLayout::eColorAttachmentOptimal,
 			.newLayout = vk::ImageLayout::ePresentSrcKHR,
 			.srcQueueFamilyIndex = vk::QueueFamilyIgnored,
 			.dstQueueFamilyIndex = vk::QueueFamilyIgnored,
@@ -162,12 +204,10 @@ int main() {
 			.subresourceRange = {vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1},
 		};
 
-		vk::DependencyInfo toPresentDep = {
+		cmd.pipelineBarrier2(vk::DependencyInfo{
 			.imageMemoryBarrierCount = 1,
 			.pImageMemoryBarriers = &toPresent,
-		};
-
-		cmd.pipelineBarrier2(toPresentDep);
+		});
 
 		cmd.end();
 
@@ -177,7 +217,7 @@ int main() {
 		};
 
 		vk::SemaphoreSubmitInfo signalInfo = {
-			.semaphore = *signalRender[frame].vkSemaphore(),
+			.semaphore = *signalRender[imageIndex].vkSemaphore(),
 			.stageMask = vk::PipelineStageFlagBits2::eClear,
 		};
 
@@ -195,10 +235,11 @@ int main() {
 		};
 
 		graphicsQueue.vkQueue().submit2({submitInfo}, fence.vkFence());
+		// graphicsQueue.vkQueue().submit2({submitInfo});
 
 		vk::PresentInfoKHR presentInfo = {
 			.waitSemaphoreCount = 1,
-			.pWaitSemaphores = &*signalRender[frame].vkSemaphore(),
+			.pWaitSemaphores = &*signalRender[imageIndex].vkSemaphore(),
 			.swapchainCount = 1,
 			.pSwapchains = &*swapchain.vkSwapchain(),
 			.pImageIndices = &imageIndex,
@@ -209,10 +250,33 @@ int main() {
 		} catch (const vk::OutOfDateKHRError& error) {
 			anvil::Swapchain newSwapchain{device, window, swapchainInfo, swapchain};
 			swapchain = std::move(newSwapchain);
+
+			images = swapchain.vkSwapchain().getImages();
+			imageViews.clear();
+
+			for (auto& image : images) {
+				vk::ImageViewCreateInfo viewInfo = {
+					.image = image,
+					.viewType = vk::ImageViewType::e2D,
+					.format = vk::Format::eB8G8R8A8Srgb,
+					.subresourceRange = {vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1},
+				};
+
+				imageViews.emplace_back(device.vkDevice(), viewInfo);
+			}
 		}
 
 		frame = (frame + 1) % images.size();
 		time += 0.01;
+
+		frameCount++;
+		auto now = std::chrono::steady_clock::now();
+		float elapsed = std::chrono::duration<float>(now - lastTime).count();
+		if (elapsed >= 1.0f) {
+			std::printf("FPS: %d\n", frameCount);
+			frameCount = 0;
+			lastTime = now;
+		}
 	}
 
 	device.vkDevice().waitIdle();
