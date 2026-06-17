@@ -21,6 +21,8 @@ namespace glfw {
 		[[nodiscard]] bool shouldClose() const;
 		void setShouldClose(bool value);
 
+		void getFramebufferSize(uint32_t& width, uint32_t& height) const;
+
 		[[nodiscard]] vk::raii::SurfaceKHR createSurface(vk::raii::Instance& instance);
 
 	private:

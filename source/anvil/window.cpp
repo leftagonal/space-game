@@ -22,6 +22,14 @@ Window::Window(Context& context, const WindowInfo& info, const WindowFeatures& f
 	return vkSurface_;
 }
 
+[[nodiscard]] Extent2D Window::framebufferSize() const {
+    Extent2D extent;
+
+    glfwWindow_.getFramebufferSize(extent.width, extent.height);
+
+    return extent;
+}
+
 [[nodiscard]] glfw::Window Window::makeWindow() {
 	auto& glfwContext = context_->glfwContext();
 

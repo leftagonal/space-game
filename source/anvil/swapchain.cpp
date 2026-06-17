@@ -3,6 +3,7 @@
 #include <anvil/semaphore.hpp>
 #include <anvil/swapchain.hpp>
 #include <anvil/window.hpp>
+#include <limits>
 
 using namespace anvil;
 
@@ -114,7 +115,7 @@ vk::raii::SwapchainKHR Swapchain::makeSwapchain(const SwapchainInfo& info, Swapc
 		.minImageCount = std::clamp(info.imageCount, capabilities.minImageCount, capabilities.maxImageCount),
 		.imageFormat = static_cast<vk::Format>(info.format.format),
 		.imageColorSpace = static_cast<vk::ColorSpaceKHR>(info.format.colourSpace),
-		.imageExtent = {800, 600},
+		.imageExtent = selectExtent(),
 		.imageArrayLayers = 1,
 		.imageUsage = vk::ImageUsageFlagBits::eColorAttachment | vk::ImageUsageFlagBits::eTransferDst,
 		.imageSharingMode = vk::SharingMode::eExclusive,
@@ -127,4 +128,22 @@ vk::raii::SwapchainKHR Swapchain::makeSwapchain(const SwapchainInfo& info, Swapc
 	};
 
 	return {device_->vkDevice(), swapchainInfo};
+}
+
+vk::Extent2D Swapchain::selectExtent() const {
+    auto& surface = window_->vkSurface();
+	auto& physicalDevice = device_->physicalDevice().vkPhysicalDevice();
+	auto capabilities = physicalDevice.getSurfaceCapabilitiesKHR(surface);
+	auto sentinel = std::numeric_limits<uint32_t>::max();
+
+	if (capabilities.currentExtent.width == sentinel || capabilities.currentExtent.height == sentinel) {
+	    auto windowSize = window_->framebufferSize();
+
+		return {
+		    .width = std::clamp(windowSize.width, capabilities.minImageExtent.width, capabilities.maxImageExtent.width),
+		    .height = std::clamp(windowSize.height, capabilities.minImageExtent.height, capabilities.maxImageExtent.height),
+		};
+	}
+
+	return capabilities.currentExtent;
 }

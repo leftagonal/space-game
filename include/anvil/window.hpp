@@ -34,6 +34,8 @@ namespace anvil {
 		[[nodiscard]] vk::raii::SurfaceKHR& vkSurface();
 		[[nodiscard]] const vk::raii::SurfaceKHR& vkSurface() const;
 
+		[[nodiscard]] Extent2D framebufferSize() const;
+
 	private:
 		WindowInfo info_;
 		WindowFeatures features_;

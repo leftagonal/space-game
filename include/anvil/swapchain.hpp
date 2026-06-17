@@ -70,5 +70,6 @@ namespace anvil {
 		vk::raii::SwapchainKHR vkSwapchain_;
 
 		[[nodiscard]] vk::raii::SwapchainKHR makeSwapchain(const SwapchainInfo& info, Swapchain* oldSwapchain = nullptr);
+		[[nodiscard]] vk::Extent2D selectExtent() const;
 	};
 }

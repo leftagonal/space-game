@@ -37,6 +37,16 @@ void Window::setShouldClose(bool value) {
 	glfwSetWindowShouldClose(handle_, value);
 }
 
+void Window::getFramebufferSize(uint32_t& width, uint32_t& height) const {
+    int iwidth;
+    int iheight;
+
+    glfwGetFramebufferSize(handle_, &iwidth, &iheight);
+
+    width = static_cast<uint32_t>(iwidth);
+    height = static_cast<uint32_t>(iheight);
+}
+
 vk::raii::SurfaceKHR Window::createSurface(vk::raii::Instance& instance) {
 	VkSurfaceKHR surface = nullptr;
 
